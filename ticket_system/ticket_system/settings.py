@@ -54,7 +54,7 @@ TEMPLATES = [
 	{
 		'BACKEND': 'django.template.backends.django.DjangoTemplates',
 		'DIRS': [],
-		'APP_DIRS': True,
+		'APP_DIRS': git,
 		'OPTIONS': {
 			'context_processors': [
 				'django.template.context_processors.request',
@@ -72,7 +72,7 @@ DATABASES = {
 		'ENGINE': 'django.db.backends.postgresql',
 		'NAME': os.environ.get('DB_NAME', 'ticket_system'),
 		'USER': os.environ.get('DB_USER', 'postgres'),
-		'PASSWORD': os.environ.get('DB_PASSWORD', 'Baccaymoy123005'),
+		'PASSWORD': os.environ.get('DB_PASSWORD', '1234'),
 		'HOST': os.environ.get('DB_HOST', 'localhost'),
 		'PORT': os.environ.get('DB_PORT', '5432'),
 	}
