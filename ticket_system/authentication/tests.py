@@ -14,6 +14,7 @@ class AuthenticationApiTests(APITestCase):
     def test_public_registration_creates_customer_only(self):
         response = self.client.post('/api/register/', {
             'username': 'newcustomer', 'password': 'CustomerPass123!x', 'address': 'School',
+            'contact_number': '09171234567',
             'role': 'ADMIN', 'is_superuser': True,
         }, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -21,6 +22,85 @@ class AuthenticationApiTests(APITestCase):
         self.assertEqual(user.role, Authentication.ROLE_CHOICES.CUSTOMER)
         self.assertTrue(Customers.objects.filter(user=user).exists())
         self.assertNotIn('password', response.data)
+        self.assertEqual(Customers.objects.get(user=user).contact_number, '09171234567')
+
+    def test_registration_requires_contact_number(self):
+        for contact in (None, '', '   '):
+            data = {'username': 'missingcontact', 'password': 'CustomerPass123!x', 'address': 'School'}
+            if contact is not None:
+                data['contact_number'] = contact
+            response = self.client.post('/api/register/', data, format='json')
+            self.assertEqual(response.status_code, 400)
+            self.assertIn('contact_number', response.data)
+        self.assertFalse(Authentication.objects.filter(username='missingcontact').exists())
+
+    def test_admin_changes_password_and_old_password_stops_working(self):
+        old_login = self.client.post('/api/login/', {'username': 'admin', 'password': 'AdminPass123!x'}).data
+        self.client.force_authenticate(self.admin)
+        response = self.client.post('/api/change-password/', {
+            'current_password': 'AdminPass123!x',
+            'new_password': 'FreshAdminSecret123!', 'confirm_password': 'FreshAdminSecret123!',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.check_password('FreshAdminSecret123!'))
+        self.assertNotEqual(self.admin.password, 'FreshAdminSecret123!')
+        self.client.force_authenticate(None)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {old_login['tokens']['access']}")
+        self.assertEqual(self.client.get('/api/accounts/').status_code, 401)
+        self.client.credentials()
+        self.assertEqual(self.client.post('/api/login/', {'username': 'admin', 'password': 'AdminPass123!x'}).status_code, 401)
+        self.assertEqual(self.client.post('/api/login/', {'username': 'admin', 'password': 'FreshAdminSecret123!'}).status_code, 200)
+
+    def test_password_change_rejects_invalid_inputs_and_other_roles(self):
+        self.client.force_authenticate(self.admin)
+        for current, new, confirmation in [
+            ('wrong', 'FreshAdminSecret123!', 'FreshAdminSecret123!'),
+            ('AdminPass123!x', 'FreshAdminSecret123!', 'different'),
+            ('AdminPass123!x', 'weak', 'weak'),
+        ]:
+            response = self.client.post('/api/change-password/', {'current_password': current, 'new_password': new, 'confirm_password': confirmation})
+            self.assertEqual(response.status_code, 400)
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.check_password('AdminPass123!x'))
+        customer = Authentication.objects.create_user(username='notadmin', password='CustomerPass123!', role='CUSTOMER')
+        self.client.force_authenticate(customer)
+        self.assertEqual(self.client.post('/api/change-password/', {}).status_code, 403)
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.post('/api/change-password/', {}).status_code, 401)
+
+    def test_seed_admin_does_not_overwrite_a_changed_password(self):
+        from importlib import import_module
+        from django.apps import apps
+        from django.db import connection
+        seed = import_module('authentication.migrations.0002_local_admin').create_local_admin
+        with connection.schema_editor(atomic=False) as editor:
+            seed(apps, editor)
+            user = Authentication.objects.get(username='localadmin')
+            self.assertEqual(user.role, 'ADMIN')
+            user.set_password('ChangedLocalSecret123!')
+            user.save()
+            seed(apps, editor)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password('ChangedLocalSecret123!'))
+
+    def test_customer_contact_number_registration_update_and_list(self):
+        response = self.client.post('/api/register/', {
+            'username': 'contactcustomer', 'password': 'CustomerPass123!x',
+            'address': 'School', 'contact_number': '+63 917 123 4567',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        customer = Customers.objects.get(user__username='contactcustomer')
+        self.assertEqual(customer.contact_number, '+63 917 123 4567')
+        self.client.force_authenticate(user=customer.user)
+        response = self.client.put(f'/api/customers/{customer.pk}/', {
+            'contact_number': '09171234568',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        customer.refresh_from_db()
+        self.assertEqual(customer.contact_number, '09171234568')
+        response = self.client.get('/api/customers/')
+        self.assertEqual(response.data[0]['contact_number'], '09171234568')
 
     def test_public_technician_registration_is_blocked(self):
         response = self.client.post('/api/register-technicians/', {
